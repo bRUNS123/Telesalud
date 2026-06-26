@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { citasDB } from './firebase';
+import { citasDB, codigosDB } from './firebase';
 import { Search, Activity, Stethoscope, HeartPulse, User, MapPin, Calendar, FileText, AlertCircle, RefreshCw, PenLine, CircleDot, CheckCircle2, Bell, Plus, X, Clock, Trash2 } from 'lucide-react';
 
 const PRECONFIGURED_REQUESTS = [
@@ -18,6 +18,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [results, setResults] = useState([]);
+  const [codigosGuardados, setCodigosGuardados] = useState([]);
   const [citasManuales, setCitasManuales] = useState([]);
   const [showCitaForm, setShowCitaForm] = useState(false);
   const [nuevaCita, setNuevaCita] = useState(EMPTY_CITA);
@@ -25,11 +26,36 @@ function App() {
 
   useEffect(() => { fetchAllPreconfigured(); }, []);
 
-  // Suscripción en tiempo real a Firestore (o localStorage como fallback)
+  // Suscripción en tiempo real a Firestore — citas manuales
   useEffect(() => {
     setFirebaseActivo(citasDB.isActive());
-    const unsub = citasDB.subscribe((citas) => {
-      setCitasManuales(citas);
+    const unsub = citasDB.subscribe((citas) => setCitasManuales(citas));
+    return () => unsub && unsub();
+  }, []);
+
+  // Suscripción en tiempo real — códigos de seguimiento guardados
+  useEffect(() => {
+    const unsub = codigosDB.subscribe(async (codigos) => {
+      setCodigosGuardados(codigos);
+      // Fetch API para cada código guardado
+      if (codigos.length > 0) {
+        const promises = codigos.map(c => fetchRequestData(c.code, c.apellido).then(data => ({ data, meta: c })));
+        const responses = await Promise.all(promises);
+        const validos = responses.filter(r => r.data !== null).map(r => ({ ...r.data, _savedId: r.meta.id }));
+        setResults(prev => {
+          // Mezcla: preconfigured ya cargados + nuevos guardados sin duplicar
+          const preExist = prev.filter(p => !p._savedId);
+          const merged = [...preExist];
+          validos.forEach(v => {
+            if (!merged.find(m => m.trackingCode === v.trackingCode)) merged.push(v);
+            else {
+              const idx = merged.findIndex(m => m.trackingCode === v.trackingCode);
+              merged[idx] = v;
+            }
+          });
+          return merged;
+        });
+      }
     });
     return () => unsub && unsub();
   }, []);
@@ -86,15 +112,18 @@ function App() {
     try {
       const data = await fetchRequestData(codigo, apellido);
       if (data) {
-        // Add to results, preventing duplicates
+        // Guardar código en Firebase/localStorage para persistencia
+        const yaGuardado = codigosGuardados.find(c => c.code === codigo);
+        if (!yaGuardado) {
+          await codigosDB.add({ code: codigo, apellido });
+        }
+        // Actualizar resultados en pantalla
         setResults(prev => {
           const exists = prev.find(p => p.trackingCode === data.trackingCode);
-          if (exists) {
-            return prev.map(p => p.trackingCode === data.trackingCode ? data : p);
-          }
+          if (exists) return prev.map(p => p.trackingCode === data.trackingCode ? data : p);
           return [data, ...prev];
         });
-        setCodigo(''); // Clear input after success
+        setCodigo('');
       } else {
         setError('No se encontró ninguna solicitud con ese código y apellido.');
       }
@@ -103,6 +132,11 @@ function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const eliminarCodigo = async (id, trackingCode) => {
+    await codigosDB.delete(id);
+    setResults(prev => prev.filter(r => r.trackingCode !== trackingCode));
   };
 
   const formatDate = (isoString) => {
@@ -281,9 +315,20 @@ function App() {
                   <Activity size={24} color="var(--primary)" />
                   {result.careDetail?.careType?.careArea?.display || 'Consulta'}
                 </h2>
-                <span className={`status-badge ${isClosed ? 'cerrada' : 'abierta'}`}>
-                  {result.careRequestStatus?.display || 'Desconocido'}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span className={`status-badge ${isClosed ? 'cerrada' : 'abierta'}`}>
+                    {result.careRequestStatus?.display || 'Desconocido'}
+                  </span>
+                  {result._savedId && (
+                    <button
+                      className="btn-icon-danger"
+                      title="Dejar de seguir este código"
+                      onClick={() => eliminarCodigo(result._savedId, result.trackingCode)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </div>
               </div>
               
               <div className="stepper-container">

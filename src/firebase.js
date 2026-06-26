@@ -109,3 +109,69 @@ export const citasDB = {
     }
   }
 };
+
+// ─── CÓDIGOS DE SEGUIMIENTO DB ────────────────────────────────────────────────
+// Persiste los códigos personalizados que el usuario agrega manualmente.
+// Estructura: { code: string, apellido: string, createdAt }
+
+export const codigosDB = {
+  isActive: () => isFirebaseActive,
+
+  /**
+   * Suscribirse a la lista de códigos guardados en tiempo real.
+   * @param {(codigos: Array) => void} callback
+   * @returns {() => void} unsubscribe
+   */
+  subscribe: (callback) => {
+    if (isFirebaseActive) {
+      const q = query(
+        collection(db, "codigos"),
+        orderBy("createdAt", "desc")
+      );
+      return onSnapshot(q, (snap) => {
+        const codigos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        callback(codigos);
+      });
+    } else {
+      const LS_KEY = 'telesalud_codigos';
+      const load = () => {
+        try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); }
+        catch { return []; }
+      };
+      callback(load());
+      const handler = (e) => {
+        if (e.key === LS_KEY) callback(JSON.parse(e.newValue || '[]'));
+      };
+      window.addEventListener('storage', handler);
+      return () => window.removeEventListener('storage', handler);
+    }
+  },
+
+  /** Guardar un nuevo código { code, apellido } */
+  add: async ({ code, apellido }) => {
+    if (isFirebaseActive) {
+      await addDoc(collection(db, "codigos"), {
+        code, apellido, createdAt: serverTimestamp()
+      });
+    } else {
+      const LS_KEY = 'telesalud_codigos';
+      const existing = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+      const updated = [{ id: Date.now().toString(), code, apellido, createdAt: new Date().toISOString() }, ...existing];
+      localStorage.setItem(LS_KEY, JSON.stringify(updated));
+      window.dispatchEvent(new StorageEvent('storage', { key: LS_KEY, newValue: JSON.stringify(updated) }));
+    }
+  },
+
+  /** Eliminar un código por su ID */
+  delete: async (id) => {
+    if (isFirebaseActive) {
+      await deleteDoc(doc(db, "codigos", id));
+    } else {
+      const LS_KEY = 'telesalud_codigos';
+      const existing = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+      const updated = existing.filter(c => c.id !== id);
+      localStorage.setItem(LS_KEY, JSON.stringify(updated));
+      window.dispatchEvent(new StorageEvent('storage', { key: LS_KEY, newValue: JSON.stringify(updated) }));
+    }
+  }
+};
