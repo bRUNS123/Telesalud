@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { citasDB } from './firebase';
 import { Search, Activity, Stethoscope, HeartPulse, User, MapPin, Calendar, FileText, AlertCircle, RefreshCw, PenLine, CircleDot, CheckCircle2, Bell, Plus, X, Clock, Trash2 } from 'lucide-react';
 
 const PRECONFIGURED_REQUESTS = [
@@ -17,27 +18,31 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [results, setResults] = useState([]);
-  const [citasManuales, setCitasManuales] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('citasManuales') || '[]'); } catch { return []; }
-  });
+  const [citasManuales, setCitasManuales] = useState([]);
   const [showCitaForm, setShowCitaForm] = useState(false);
   const [nuevaCita, setNuevaCita] = useState(EMPTY_CITA);
+  const [firebaseActivo, setFirebaseActivo] = useState(false);
 
   useEffect(() => { fetchAllPreconfigured(); }, []);
 
+  // Suscripción en tiempo real a Firestore (o localStorage como fallback)
   useEffect(() => {
-    localStorage.setItem('citasManuales', JSON.stringify(citasManuales));
-  }, [citasManuales]);
+    setFirebaseActivo(citasDB.isActive());
+    const unsub = citasDB.subscribe((citas) => {
+      setCitasManuales(citas);
+    });
+    return () => unsub && unsub();
+  }, []);
 
-  const guardarCita = () => {
+  const guardarCita = async () => {
     if (!nuevaCita.area || !nuevaCita.fecha) return;
-    setCitasManuales(prev => [...prev, { ...nuevaCita, id: Date.now() }]);
+    await citasDB.add(nuevaCita);
     setNuevaCita(EMPTY_CITA);
     setShowCitaForm(false);
   };
 
-  const eliminarCita = (id) => {
-    setCitasManuales(prev => prev.filter(c => c.id !== id));
+  const eliminarCita = async (id) => {
+    await citasDB.delete(id);
   };
 
   const fetchAllPreconfigured = async () => {
@@ -114,6 +119,9 @@ function App() {
       <header className="header">
         <h1>Telesalud Dashboard</h1>
         <p>Seguimiento centralizado de tus solicitudes médicas</p>
+        {firebaseActivo && (
+          <span className="firebase-badge">🔥 Sincronizado en la nube</span>
+        )}
       </header>
 
       {error && (
